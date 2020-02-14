@@ -1,4 +1,5 @@
 import argparse
+import importlib
 import os
 import sys
 from datetime import datetime, timedelta
@@ -103,6 +104,9 @@ if __name__ == '__main__':
                                                                 'Default: localhost.')
     options.add_argument('--db-port', default='', help='The database port to use for raw cell phone data. '
                                                        'Default: 3306.')
+    options.add_argument('--transformations-file', '-a', default='transformations.py',
+                         help='The file containing the transformations to be applied. See the README for more '
+                              'information.')
     options.add_argument('--timespan', '-t', choices=['hourly', 'daily', 'weekly', 'day-night'], default='daily',
                          help='The timespan to use for aggregating raw data.')
     options.add_argument('--raw-data-tables', '-r', nargs='+', choices=raw_data_tables, default=raw_data_tables,
@@ -125,6 +129,9 @@ if __name__ == '__main__':
     else:  # CSV directory
         read_data_table = read_data_func('csv', args.csv_dir)
 
+    # Import the transformations to be applied
+    transformations = importlib.import_module(args.transformations_file.split('.py')[0])
+
     for table in args.raw_data_tables:
         raw_data = read_data_table(table)
 
@@ -133,7 +140,11 @@ if __name__ == '__main__':
         time_chunker = TimeChunker(earliest_timestamp, args.timespan)
 
         for start_time, end_time in time_chunker.chunks():
+            data_chunk = raw_data.loc[(raw_data['timestamp'] >= start_time) & (raw_data['timestamp'] < end_time), :]
+
+            transformed = pd.DataFrame({'device_id': data_chunk.get('device_id').unique()})
+            for transformation in transformations:
+                transformed = transformed.merge(transformation(data_chunk))
+
             if end_time >= latest_timestamp:
                 break
-
-            data_chunk = raw_data.loc[(raw_data['timestamp'] >= start_time) & (raw_data['timestamp'] < end_time), :]

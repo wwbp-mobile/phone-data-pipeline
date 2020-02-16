@@ -26,7 +26,8 @@ def create_schema():
         >>> engine = create_engine('sqlite:///:memory:')    
         >>> schema = create_schema()
         >>> schema.create_all(engine)
-        >>> for t in schema.sorted_tables: print(t.name)
+        >>> for t in schema.sorted_tables: 
+        ...    print(t.name)
         applications_foreground
         battery
         calls
@@ -35,8 +36,6 @@ def create_schema():
         messages
         screen
 
-    TODO:
-        * does device_id need the max character limit?
     """
 
     metadata = MetaData()
@@ -44,21 +43,24 @@ def create_schema():
     app_table = Table('applications_foreground', metadata,
         Column('_id', Integer, primary_key=True, autoincrement=True),
         Column('timestamp', Float, default=0), 
-        Column('device_id', String(150), default=''),
+        Column('timezone_offset', Float, default=0),
+        Column('device_id', String, default=''),
         Column('package_name', String),
         Column('screen_active', Boolean)) # TODO: not in AWARE spec, remove?
         
     bat_table = Table('battery', metadata,
         Column('_id', Integer, primary_key=True, autoincrement=True),
         Column('timestamp', Float, default=0), 
-        Column('device_id', String(150), default=''),
+        Column('timezone_offset', Float, default=0),
+        Column('device_id', String, default=''),
         Column('battery_level', Integer, default=0),
         Column('battery_level', Integer, default=0))
     
     cal_table = Table('calls', metadata,
         Column('_id', Integer, primary_key=True, autoincrement=True),
         Column('timestamp', Float, default=0), 
-        Column('device_id', String(150), default=''),
+        Column('timezone_offset', Float, default=0),
+        Column('device_id', String, default=''),
         Column('call_type', Integer, default=0),
         Column('call_duration', Integer, default=0),
         Column('trace', String))
@@ -66,14 +68,16 @@ def create_schema():
     lig_table = Table('light', metadata,
         Column('_id', Integer, primary_key=True, autoincrement=True),
         Column('timestamp', Float, default=0), 
-        Column('device_id', String(150), default=''),
+        Column('timezone_offset', Float, default=0),
+        Column('device_id', String, default=''),
         Column('double_light_lux', Float, default=0),
         Column('accuracy', Integer, default=0))
 
     loc_table = Table('locations', metadata,
         Column('_id', Integer, primary_key=True, autoincrement=True),
         Column('timestamp', Float, default=0), 
-        Column('device_id', String(150), default=''),
+        Column('timezone_offset', Float, default=0),
+        Column('device_id', String, default=''),
         Column('double_latitude', Float, default=0),
         Column('double_longitude', Float, default=0),
         Column('double_speed', Float, default=0),
@@ -82,14 +86,16 @@ def create_schema():
     mes_table = Table('messages', metadata,
         Column('_id', Integer, primary_key=True, autoincrement=True),
         Column('timestamp', Float, default=0), 
-        Column('device_id', String(150), default=''),
+        Column('timezone_offset', Float, default=0),
+        Column('device_id', String, default=''),
         Column('message_type', Integer, default=0),
         Column('trace', String))
 
     scr_table = Table('screen', metadata,
         Column('_id', Integer, primary_key=True, autoincrement=True),
         Column('timestamp', Float, default=0), 
-        Column('device_id', String(150), default=''),
+        Column('timezone_offset', Float, default=0),
+        Column('device_id', String, default=''),
         Column('screen_status', Integer, default=0))
 
     return metadata
@@ -97,7 +103,6 @@ def create_schema():
     
 if __name__ == '__main__':
     engine = create_engine('sqlite:///:memory:')    
-
 
     schema = create_schema()
     schema.create_all(engine)
@@ -109,7 +114,8 @@ if __name__ == '__main__':
     # insert into the messages table
     ins = msg.insert().values(
         timestamp=1234,
-        device_id=1,
+        timezone_offset=-6000,
+        device_id='1',
         message_type=0,
         trace='hash'
     )
@@ -118,3 +124,6 @@ if __name__ == '__main__':
     conn = engine.connect()
     conn.execute(ins)
 
+    # run docstring tests
+    import doctest
+    doctest.testmod()

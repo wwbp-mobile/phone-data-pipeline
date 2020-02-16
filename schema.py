@@ -8,7 +8,7 @@ TODO:
     * review schema for any missing attributes/indices 
     * unit tests for schema verification (?)
 """
-from sqlalchemy import Float, String, Boolean, Integer, create_engine
+from sqlalchemy import Float, String, Boolean, Integer, create_engine, select
 from sqlalchemy.schema import Column, MetaData, Table, Sequence, Index
 
 def create_schema():
@@ -22,7 +22,6 @@ def create_schema():
 
     Examples:
         Create an in-memory sqlite db and list table names
-        
         >>> engine = create_engine('sqlite:///:memory:')    
         >>> schema = create_schema()
         >>> schema.create_all(engine)
@@ -36,6 +35,21 @@ def create_schema():
         messages
         screen
 
+        Insert an entry into the messages table and select it
+        >>> msg = schema.tables['messages']    
+        >>> ins = msg.insert().values(
+        ...         timestamp=1234,
+        ...         timezone_offset=-6000,
+        ...         device_id='1',
+        ...         message_type=0,
+        ...         trace='hash')
+        >>> conn = engine.connect()
+        >>> res = conn.execute(ins)
+        >>> sel = select([msg]).where(msg.c.device_id=='1')
+        >>> res = conn.execute(sel)
+        >>> for _row in res:
+        ...     print(_row)
+        (1, 1234.0, -6000.0, '1', 0, 'hash')
     """
 
     metadata = MetaData()
@@ -102,28 +116,6 @@ def create_schema():
 
     
 if __name__ == '__main__':
-    engine = create_engine('sqlite:///:memory:')    
-
-    schema = create_schema()
-    schema.create_all(engine)
-    for t in schema.sorted_tables:
-        print(t.name)
-
-    msg = schema.tables['messages']
-    
-    # insert into the messages table
-    ins = msg.insert().values(
-        timestamp=1234,
-        timezone_offset=-6000,
-        device_id='1',
-        message_type=0,
-        trace='hash'
-    )
-
-    # execute the statement
-    conn = engine.connect()
-    conn.execute(ins)
-
     # run docstring tests
     import doctest
     doctest.testmod()

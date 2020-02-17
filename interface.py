@@ -37,12 +37,15 @@ def preprocess_aware(table, timezone_table):
         .sort_values(['device_id', 'timestamp']) \
         .groupby('device_id')['timestamp'] \
         .shift(-1) \
-        .fillna(max_timestamp)
+        .rename(columns={'timestamp': 'start_timestamp'}) \
+        .fillna(max_timestamp) \
+        .drop('_id')
 
-    for tz_row in timezone_table.itertuples(index=False):
-        table.loc[(table['timestamp'] >= tz_row.timestamp) &
-                  ((table['timestamp'] < tz_row.end_timestamp) | pd.isna(tz_row.end_timestamp)),
-                  'timezone'] = tz_row.timezone
+    # Assumes we have an initial timezone at recruitment time, in which case all values in the sensor table should
+    # occur between the earliest timezone timestamp and the latest sensor table timestamp (which is also the latest
+    # timezone stamp).
+    table = table.merge(timezone_table, on='device_id')
+    table = table[(table['timestamp'] >= table['start_timestamp']) & (table['timestamp'] < table['end_timestamp'])]
     table['time_offset'] = table.apply(lambda r: pytz
                                        .timezone(r['timezone'])
                                        .utcoffset(datetime.fromtimestamp(r['timestamp'] // 1000)), axis='columns')
@@ -171,9 +174,8 @@ if __name__ == '__main__':
     for table in args.raw_data_tables:
         raw_data = read_data_table(table)
 
-        raw_data = preprocess(raw_data, timezone_table)
-        print(raw_data)
-        continue
+        # Disabling while we sort out the timezone issues with AWARE
+        # raw_data = preprocess(raw_data, timezone_table)
 
         earliest_timestamp = raw_data['timestamp'].min()
         latest_timestamp = raw_data['timestamp'].max()
@@ -183,8 +185,9 @@ if __name__ == '__main__':
             data_chunk = raw_data.loc[(raw_data['timestamp'] >= start_time) & (raw_data['timestamp'] < end_time), :]
 
             transformed = pd.DataFrame({'device_id': data_chunk.get('device_id').unique()})
-            for transformation in transformations:
-                transformed = transformed.merge(transformation(data_chunk))
+            for feature in transformations[table]:
+                transform = transformations[table][feature]
+                transformed = transformed.merge(transform(data_chunk, feature))
 
             if end_time >= latest_timestamp:
                 break

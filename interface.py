@@ -5,6 +5,7 @@ import sys
 from datetime import datetime, timedelta
 
 import pandas as pd
+import pytz
 from sqlalchemy import create_engine
 
 raw_data_tables = [
@@ -22,9 +23,34 @@ def read_data_func(datastore, container):
     if datastore == 'sql':
         return lambda table_name: pd.read_sql('select * from {}'.format(table_name), container)
     elif datastore == 'csv':
-        return lambda table_name: pd.read_csv(os.path.join(container, '{}.csv'.format(table_name)))
+        return lambda table_name: pd.read_csv(os.path.join(container, '{}.csv'.format(table_name)), sep='\t')
     else:
         raise TypeError('Unrecognized type: ' + str(datastore))
+
+
+def preprocess_aware(table, timezone_table):
+    # Restructure the timezone table to have a beginning (inclusive) and ending (exclusive) timestamp.
+    # The ending timestamp is the next timestamp found for that device. If there is no next timestamp, use the latest
+    # timestamp from the table to be processed + 1.
+    max_timestamp = table['timestamp'].max() + 1
+    timezone_table['end_timestamp'] = timezone_table \
+        .sort_values(['device_id', 'timestamp']) \
+        .groupby('device_id')['timestamp'] \
+        .shift(-1) \
+        .fillna(max_timestamp)
+
+    for tz_row in timezone_table.itertuples(index=False):
+        table.loc[(table['timestamp'] >= tz_row.timestamp) &
+                  ((table['timestamp'] < tz_row.end_timestamp) | pd.isna(tz_row.end_timestamp)),
+                  'timezone'] = tz_row.timezone
+    table['time_offset'] = table.apply(lambda r: pytz
+                                       .timezone(r['timezone'])
+                                       .utcoffset(datetime.fromtimestamp(r['timestamp'] // 1000)), axis='columns')
+    return table
+
+
+def preprocess_pdk(table):
+    return table
 
 
 class TimeChunker(object):
@@ -42,6 +68,7 @@ class TimeChunker(object):
                 while True:
                     yield start_time, start_time + increment
                     start_time += increment
+
             return _inner_generate
 
         @generate
@@ -111,6 +138,8 @@ if __name__ == '__main__':
                          help='The timespan to use for aggregating raw data.')
     options.add_argument('--raw-data-tables', '-r', nargs='+', choices=raw_data_tables, default=raw_data_tables,
                          help='Specify raw data tables.')
+    options.add_argument('--framework', '-f', choices=['aware', 'pdk'], type=str.lower, default='aware',
+                         help='The data collection framework used. Default: AWARE.')
     args = options.parse_args()
 
     # Setup connections to data sources and unify with a single read_data_table function
@@ -129,11 +158,22 @@ if __name__ == '__main__':
     else:  # CSV directory
         read_data_table = read_data_func('csv', args.csv_dir)
 
+    # Handle preprocessing
+    if args.framework == 'aware':
+        preprocess = preprocess_aware
+    else:
+        preprocess = preprocess_pdk
+    timezone_table = read_data_table('timezone')
+
     # Import the transformations to be applied
     transformations = importlib.import_module(args.transformations_file.split('.py')[0])
 
     for table in args.raw_data_tables:
         raw_data = read_data_table(table)
+
+        raw_data = preprocess(raw_data, timezone_table)
+        print(raw_data)
+        continue
 
         earliest_timestamp = raw_data['timestamp'].min()
         latest_timestamp = raw_data['timestamp'].max()

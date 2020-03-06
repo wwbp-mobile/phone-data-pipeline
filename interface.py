@@ -1,12 +1,12 @@
 import argparse
-import importlib
 import os
 import sys
-from datetime import datetime, timedelta
 
-import pandas as pd
-import pytz
 from sqlalchemy import create_engine
+
+from chunks import DataTableChunker
+from constants import HOURLY, DAILY, WEEKLY, DAY_NIGHT
+from dataset import SQLConnection, CSVConnection, AWAREDataTable, StandardizedDataTable
 
 raw_data_tables = [
     'applications_foreground',
@@ -17,108 +17,6 @@ raw_data_tables = [
     'messages',
     'screen'
 ]
-
-
-def read_data_func(datastore, container):
-    if datastore == 'sql':
-        return lambda table_name: pd.read_sql('select * from {}'.format(table_name), container)
-    elif datastore == 'csv':
-        return lambda table_name: pd.read_csv(os.path.join(container, '{}.csv'.format(table_name)), sep='\t')
-    else:
-        raise TypeError('Unrecognized type: ' + str(datastore))
-
-
-def preprocess_aware(table, timezone_table):
-    # Restructure the timezone table to have a beginning (inclusive) and ending (exclusive) timestamp.
-    # The ending timestamp is the next timestamp found for that device. If there is no next timestamp, use the latest
-    # timestamp from the table to be processed + 1.
-    max_timestamp = table['timestamp'].max() + 1
-    timezone_table['end_timestamp'] = timezone_table \
-        .sort_values(['device_id', 'timestamp']) \
-        .groupby('device_id')['timestamp'] \
-        .shift(-1) \
-        .rename(columns={'timestamp': 'start_timestamp'}) \
-        .fillna(max_timestamp) \
-        .drop('_id')
-
-    # Assumes we have an initial timezone at recruitment time, in which case all values in the sensor table should
-    # occur between the earliest timezone timestamp and the latest sensor table timestamp (which is also the latest
-    # timezone stamp).
-    table = table.merge(timezone_table, on='device_id')
-    table = table[(table['timestamp'] >= table['start_timestamp']) & (table['timestamp'] < table['end_timestamp'])]
-    table['time_offset'] = table.apply(lambda r: pytz
-                                       .timezone(r['timezone'])
-                                       .utcoffset(datetime.fromtimestamp(r['timestamp'] // 1000)), axis='columns')
-    return table
-
-
-def preprocess_pdk(table):
-    return table
-
-
-class TimeChunker(object):
-    def __init__(self, earliest_timestamp, timespan):
-        self.human_readable_timespan = timespan
-        self.earliest_timestamp = earliest_timestamp
-
-        self.next_time_chunk = self._time_info(timespan)
-
-    @staticmethod
-    def _time_info(timespan):
-        def generate(func):
-            def _inner_generate(earliest_dt):
-                start_time, increment = func(earliest_dt)
-                while True:
-                    yield start_time, start_time + increment
-                    start_time += increment
-
-            return _inner_generate
-
-        @generate
-        def hourly(dt):
-            return datetime(dt.year, dt.month, dt.day, hour=dt.hour).timestamp() * 1000, 3600000
-
-        @generate
-        def daily(dt):
-            return datetime(dt.year, dt.month, dt.day).timestamp() * 1000, 86400000
-
-        @generate
-        def weekly(dt):
-            first_day = dt - timedelta(days=(dt.weekday() + 1) % 7)
-            return datetime(first_day.year, first_day.month, first_day.day).timestamp() * 1000, 604800000
-
-        @generate
-        def day_night(dt):
-            morning = datetime(dt.year, dt.month, dt.day, hour=8)
-            evening = datetime(dt.year, dt.month, dt.day, hour=20)
-            previous_day = dt - timedelta(days=1)
-            previous_evening = datetime(previous_day.year, previous_day.month, previous_day.day, hour=20)
-
-            start_timestamp = previous_evening
-            if evening < dt:
-                start_timestamp = evening
-            elif morning < dt:
-                start_timestamp = morning
-            return start_timestamp.timestamp() * 1000, 43200000
-
-        timespan = str(timespan).lower()
-        timespans = {
-            'hourly': hourly,
-            'daily': daily,
-            'weekly': weekly,
-            'day-night': day_night
-        }
-
-        if timespan not in timespans:
-            raise ValueError('Invalid timespan: {}. Accepted: hourly, daily, weekly, day-night.'.format(timespan))
-
-        return timespans[timespan]
-
-    def chunks(self):
-        earliest_datetime = datetime.fromtimestamp(self.earliest_timestamp / 1000)
-        for start_time, end_time in self.next_time_chunk(earliest_datetime):
-            yield start_time, end_time
-
 
 if __name__ == '__main__':
     options = argparse.ArgumentParser(description='Extract features from raw cell phone data')
@@ -137,7 +35,7 @@ if __name__ == '__main__':
     options.add_argument('--transformations-file', '-a', default='transformations.py',
                          help='The file containing the transformations to be applied. See the README for more '
                               'information.')
-    options.add_argument('--timespan', '-t', choices=['hourly', 'daily', 'weekly', 'day-night'], default='daily',
+    options.add_argument('--timespan', '-t', choices=[HOURLY, DAILY, WEEKLY, DAY_NIGHT], default='daily',
                          help='The timespan to use for aggregating raw data.')
     options.add_argument('--raw-data-tables', '-r', nargs='+', choices=raw_data_tables, default=raw_data_tables,
                          help='Specify raw data tables.')
@@ -145,7 +43,7 @@ if __name__ == '__main__':
                          help='The data collection framework used. Default: AWARE.')
     args = options.parse_args()
 
-    # Setup connections to data sources and unify with a single read_data_table function
+    # Setup connections to data sources and unify into DataTable interface
     if args.database:
         if args.database_type == 'mysql':
             if not args.db_user or not args.db_pass:
@@ -157,37 +55,20 @@ if __name__ == '__main__':
                                                                                       db=args.database))
         else:  # sqlite
             engine = create_engine('sqlite:///{db}'.format(db=os.path.abspath(args.database)))
-        read_data_table = read_data_func('sql', engine)
+        connection = SQLConnection(engine)
     else:  # CSV directory
-        read_data_table = read_data_func('csv', args.csv_dir)
+        connection = CSVConnection(args.csv_dir)
 
-    # Handle preprocessing
     if args.framework == 'aware':
-        preprocess = preprocess_aware
+        DataTable = AWAREDataTable
     else:
-        preprocess = preprocess_pdk
-    timezone_table = read_data_table('timezone')
+        DataTable = StandardizedDataTable
 
-    # Import the transformations to be applied
-    transformations = importlib.import_module(args.transformations_file.split('.py')[0])
+    # Begin processing the data tables one at a time
+    for table_name in args.raw_data_tables:
+        data_table = DataTable(table_name)
 
-    for table in args.raw_data_tables:
-        raw_data = read_data_table(table)
+        table_chunker = DataTableChunker(data_table, args.timespan)
 
-        # Disabling while we sort out the timezone issues with AWARE
-        # raw_data = preprocess(raw_data, timezone_table)
-
-        earliest_timestamp = raw_data['timestamp'].min()
-        latest_timestamp = raw_data['timestamp'].max()
-        time_chunker = TimeChunker(earliest_timestamp, args.timespan)
-
-        for start_time, end_time in time_chunker.chunks():
-            data_chunk = raw_data.loc[(raw_data['timestamp'] >= start_time) & (raw_data['timestamp'] < end_time), :]
-
-            transformed = pd.DataFrame({'device_id': data_chunk.get('device_id').unique()})
-            for feature in transformations[table]:
-                transform = transformations[table][feature]
-                transformed = transformed.merge(transform(data_chunk, feature))
-
-            if end_time >= latest_timestamp:
-                break
+        for data_table_chunk in table_chunker.chunks():
+            pass

@@ -5,18 +5,9 @@ import sys
 from sqlalchemy import create_engine
 
 from chunks import DataTableChunker
-from constants import HOURLY, DAILY, WEEKLY, DAY_NIGHT
+from constants import HOURLY, DAILY, WEEKLY, DAY_NIGHT, RAW_DATA_TABLES
 from dataset import SQLConnection, CSVConnection, AWAREDataTable, StandardizedDataTable
 
-raw_data_tables = [
-    'applications_foreground',
-    'battery',
-    'calls',
-    'light',
-    'locations',
-    'messages',
-    'screen'
-]
 
 if __name__ == '__main__':
     options = argparse.ArgumentParser(description='Extract features from raw cell phone data')
@@ -37,7 +28,7 @@ if __name__ == '__main__':
                               'information.')
     options.add_argument('--timespan', '-t', choices=[HOURLY, DAILY, WEEKLY, DAY_NIGHT], default='daily',
                          help='The timespan to use for aggregating raw data.')
-    options.add_argument('--raw-data-tables', '-r', nargs='+', choices=raw_data_tables, default=raw_data_tables,
+    options.add_argument('--raw-data-tables', '-r', nargs='+', choices=RAW_DATA_TABLES, default=RAW_DATA_TABLES,
                          help='Specify raw data tables.')
     options.add_argument('--framework', '-f', choices=['aware', 'pdk'], type=str.lower, default='aware',
                          help='The data collection framework used. Default: AWARE.')
@@ -70,5 +61,5 @@ if __name__ == '__main__':
 
         table_chunker = DataTableChunker(data_table, args.timespan)
 
-        for data_table_chunk in table_chunker.chunks():
+        for data_table_chunk in table_chunker._chunk_table():
             pass

@@ -22,7 +22,9 @@ class DataTableChunker(object):
         self.latest_timestamp = data_table.table['timestamp'].max()
         self.next_time_chunk = self._time_info(timespan)
 
-        self._data_table = data_table
+        self.table = data_table
+
+        self._chunk_table()
 
     @staticmethod
     def _time_info(timespan):
@@ -75,14 +77,14 @@ class DataTableChunker(object):
 
         return timespans[timespan]
 
-    def chunks(self):
+    def _chunk_table(self):
         earliest_datetime = datetime.fromtimestamp(self.earliest_timestamp / 1000)
 
         for start_time, end_time in self.next_time_chunk(earliest_datetime):
             if start_time >= self.latest_timestamp:
                 break
 
-            data_chunk = self._data_table.table.loc[
-                         (self._data_table.table['timestamp'] >= start_time) &
-                         (self._data_table.table['timestamp'] < end_time), :]
-            yield DataTableChunk(data_chunk, start_time, end_time)
+            self.table.table.loc[(self.table.table['timestamp'] >= start_time) &
+                                 (self.table.table['timestamp'] < end_time), 'chunk_start'] = start_time
+            self.table.table.loc[(self.table.table['timestamp'] >= start_time) &
+                                 (self.table.table['timestamp'] < end_time), 'chunk_end'] = end_time
